@@ -12,6 +12,7 @@ from rest_framework.tests.models import (HasPositiveIntegerAsChoice, Album, Acti
 from rest_framework.tests.models import BasicModelSerializer
 import datetime
 import pickle
+from decimal import Decimal, ROUND_CEILING, Context
 
 
 class SubComment(object):
@@ -1840,3 +1841,54 @@ class BoolenFieldTypeTest(TestCase):
         '''
         bfield = self.serializer.get_fields()['started']
         self.assertEqual(type(bfield), fields.BooleanField)
+
+
+class LongDecimalFieldModel(models.Model):
+    dec = models.DecimalField(max_digits=20, decimal_places=10, default=0)
+
+class ShowAllDefinedDecimalDigits(TestCase):
+
+    def setUp(self):
+        super(ShowAllDefinedDecimalDigits, self).setUp()
+
+        class LongDecimalFieldSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = LongDecimalFieldModel
+                fields = ['dec']
+
+        self.long_decimal_field_serializer = LongDecimalFieldSerializer
+
+    def test_twenty_digits(self):
+        d = 1234567890.1098765432
+        serializer = self.long_decimal_field_serializer(data={'dec': d})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'],
+                         Decimal(d).quantize(Decimal('0.0000000001')))
+
+    def test_thirty_digits(self):
+        d = 12345678910111213141.1098765432
+        serializer = self.long_decimal_field_serializer(data={'dec': d})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'], d)
+
+    def test_five_digits_whole(self):
+        d = 12345
+        serializer = self.long_decimal_field_serializer(data={'dec': d})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'], d)
+
+    def test_five_digits_decimal(self):
+        d = 123.45
+        serializer = self.long_decimal_field_serializer(data={'dec': d})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'], Decimal(d).quantize(Decimal('0.01')))
+
+    def test_default(self):
+        serializer = self.long_decimal_field_serializer(data={})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'], 0)
