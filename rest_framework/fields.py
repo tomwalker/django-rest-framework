@@ -431,7 +431,7 @@ class BooleanField(WritableField):
     def field_from_native(self, data, files, field_name, into):
         # HTML checkboxes do not explicitly represent unchecked as `False`
         # we deal with that here...
-        if isinstance(data, QueryDict):
+        if isinstance(data, QueryDict) and self.default is None:
             self.default = False
 
         return super(BooleanField, self).field_from_native(
@@ -516,6 +516,11 @@ class ChoiceField(WritableField):
         self._choices = self.widget.choices = list(value)
 
     choices = property(_get_choices, _set_choices)
+
+    def metadata(self):
+        data = super(ChoiceField, self).metadata()
+        data['choices'] = [{'value': v, 'display_name': n} for v, n in self.choices]
+        return data
 
     def validate(self, value):
         """
@@ -969,7 +974,7 @@ class ImageField(FileField):
             return None
 
         from rest_framework.compat import Image
-        assert Image is not None, 'PIL must be installed for ImageField support'
+        assert Image is not None, 'Either Pillow or PIL must be installed for ImageField support.'
 
         # We need to get a file object for PIL. We might have a path or we might
         # have to read the data into memory.

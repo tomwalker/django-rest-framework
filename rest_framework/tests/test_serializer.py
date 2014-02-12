@@ -12,6 +12,7 @@ from rest_framework.tests.models import (HasPositiveIntegerAsChoice, Album, Acti
 from rest_framework.tests.models import BasicModelSerializer
 import datetime
 import pickle
+from decimal import Decimal, ROUND_CEILING, Context
 
 
 class SubComment(object):
@@ -100,6 +101,17 @@ class NestedSerializer(serializers.Serializer):
 
 class ModelSerializerWithNestedSerializer(serializers.ModelSerializer):
     nested = NestedSerializer(source='*')
+
+    class Meta:
+        model = Person
+
+
+class NestedSerializerWithRenamedField(serializers.Serializer):
+    renamed_info = serializers.Field(source='info')
+
+
+class ModelSerializerWithNestedSerializerWithRenamedField(serializers.ModelSerializer):
+    nested = NestedSerializerWithRenamedField(source='*')
 
     class Meta:
         model = Person
@@ -456,6 +468,20 @@ class ValidationTests(TestCase):
         )
         self.assertEqual(serializer.is_valid(), True)
 
+    def test_writable_star_source_with_inner_source_fields(self):
+        """
+        Tests that a serializer with source="*" correctly expands the
+        it's fields into the outer serializer even if they have their
+        own 'source' parameters.
+        """
+
+        serializer = ModelSerializerWithNestedSerializerWithRenamedField(data={
+            'name': 'marko',
+            'nested': {'renamed_info': 'hi'}},
+        )
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.errors, {})
+
 
 class CustomValidationTests(TestCase):
     class CommentSerializerWithFieldValidator(CommentSerializer):
@@ -557,6 +583,29 @@ class ModelValidationTests(TestCase):
         second_serializer = AlbumsSerializer(data={'title': 'a'})
         self.assertFalse(second_serializer.is_valid())
         self.assertEqual(second_serializer.errors,  {'title': ['Album with this Title already exists.']})
+
+    def test_foreign_key_is_null_with_partial(self):
+        """
+        Test ModelSerializer validation with partial=True
+
+        Specifically test that a null foreign key does not pass validation
+        """
+        album = Album(title='test')
+        album.save()
+
+        class PhotoSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Photo
+
+        photo_serializer = PhotoSerializer(data={'description': 'test', 'album': album.pk})
+        self.assertTrue(photo_serializer.is_valid())
+        photo = photo_serializer.save()
+
+        # Updating only the album (foreign key)
+        photo_serializer = PhotoSerializer(instance=photo, data={'album': ''}, partial=True)
+        self.assertFalse(photo_serializer.is_valid())
+        self.assertTrue('album' in photo_serializer.errors)
+        self.assertEqual(photo_serializer.errors['album'], photo_serializer.error_messages['required'])
 
     def test_foreign_key_with_partial(self):
         """
@@ -1720,9 +1769,12 @@ class TestSerializerTransformMethods(TestCase):
                 'b_renamed': None,
             }
         )
+
+
 class DefaultTrueBooleanModel(models.Model):
     cat = models.BooleanField(default=True)
     dog = models.BooleanField(default=False)
+
 
 class SerializerDefaultTrueBoolean(TestCase):
 
@@ -1741,17 +1793,108 @@ class SerializerDefaultTrueBoolean(TestCase):
         self.assertEqual(serializer.data['cat'], True)
         self.assertEqual(serializer.data['dog'], False)
 
+
     def test_enabled_as_false(self):
-        serializer = self.default_true_boolean_serializer({'cat': False, 'dog': False})
+        serializer = self.default_true_boolean_serializer(data={'cat': False,
+                                                                'dog': False})
+        self.assertEqual(serializer.is_valid(), True)
         self.assertEqual(serializer.data['cat'], False)
         self.assertEqual(serializer.data['dog'], False)
 
     def test_enabled_as_true(self):
-        serializer = self.default_true_boolean_serializer({'cat': True, 'dog': True})
+        serializer = self.default_true_boolean_serializer(data={'cat': True,
+                                                                'dog': True})
+        self.assertEqual(serializer.is_valid(), True)
         self.assertEqual(serializer.data['cat'], True)
         self.assertEqual(serializer.data['dog'], True)
 
     def test_enabled_partial(self):
-        serializer = self.default_true_boolean_serializer({'cat': False})
+        serializer = self.default_true_boolean_serializer(data={'cat': False},
+                                                          partial=True)
+        self.assertEqual(serializer.is_valid(), True)
         self.assertEqual(serializer.data['cat'], False)
         self.assertEqual(serializer.data['dog'], False)
+
+        
+class BoolenFieldTypeTest(TestCase):
+    '''
+    Ensure the various Boolean based model fields are rendered as the proper
+    field type
+    
+    '''
+    
+    def setUp(self):
+        '''
+        Setup an ActionItemSerializer for BooleanTesting
+        '''
+        data = {
+            'title': 'b' * 201,
+        }
+        self.serializer = ActionItemSerializer(data=data)
+
+    def test_booleanfield_type(self):
+        '''
+        Test that BooleanField is infered from models.BooleanField
+        '''
+        bfield = self.serializer.get_fields()['done']
+        self.assertEqual(type(bfield), fields.BooleanField)
+    
+    def test_nullbooleanfield_type(self):
+        '''
+        Test that BooleanField is infered from models.NullBooleanField 
+        
+        https://groups.google.com/forum/#!topic/django-rest-framework/D9mXEftpuQ8
+        '''
+        bfield = self.serializer.get_fields()['started']
+        self.assertEqual(type(bfield), fields.BooleanField)
+
+
+class LongDecimalFieldModel(models.Model):
+    dec = models.DecimalField(max_digits=20, decimal_places=10, default=0)
+
+class ShowAllDefinedDecimalDigits(TestCase):
+
+    def setUp(self):
+        super(ShowAllDefinedDecimalDigits, self).setUp()
+
+        class LongDecimalFieldSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = LongDecimalFieldModel
+                fields = ['dec']
+
+        self.long_decimal_field_serializer = LongDecimalFieldSerializer
+
+    def test_twenty_digits(self):
+        d = 1234567890.1098765432
+        serializer = self.long_decimal_field_serializer(data={'dec': d})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'],
+                         Decimal(d).quantize(Decimal('0.0000000001')))
+
+    def test_thirty_digits(self):
+        d = 12345678910111213141.1098765432
+        serializer = self.long_decimal_field_serializer(data={'dec': d})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'], d)
+
+    def test_five_digits_whole(self):
+        d = 12345
+        serializer = self.long_decimal_field_serializer(data={'dec': d})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'], d)
+
+    def test_five_digits_decimal(self):
+        d = 123.45
+        serializer = self.long_decimal_field_serializer(data={'dec': d})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'], Decimal(d).quantize(Decimal('0.01')))
+
+    def test_default(self):
+        serializer = self.long_decimal_field_serializer(data={})
+
+        self.assertEqual(serializer.is_valid(), True)
+        self.assertEqual(serializer.data['dec'], 0)

@@ -42,6 +42,21 @@ You can determine your currently installed version using `pip freeze`:
 
 ### Master
 
+* JSON renderer now deals with objects that implement a dict-like interface.
+* Fix compatiblity with newer versions of `django-oauth-plus`.
+* Bugfix: Refine behavior that calls model manager `all()` across nested serializer relationships, preventing erronous behavior with some non-ORM objects, and preventing unneccessary queryset re-evaluations.
+* Bugfix: Allow defaults on BooleanFields to be properly honored when values are not supplied.
+* Bugfix: Prevent double-escaping of non-latin1 URL query params when appending `format=json` params.
+
+### 2.3.10
+
+**Date**: 6th December 2013
+
+* Add in choices information for ChoiceFields in response to `OPTIONS` requests.
+* Added `pre_delete()` and `post_delete()` method hooks.
+* Added status code category helper functions.
+* Bugfix: Partial updates which erronously set a related field to `None` now correctly fail validation instead of raising an exception.
+* Bugfix: Responses without any content no longer include an HTTP `'Content-Type'` header.
 * Bugfix: Correctly handle validation errors in PUT-as-create case, responding with 400.
 
 ### 2.3.9
@@ -75,6 +90,19 @@ You can determine your currently installed version using `pip freeze`:
 * Bugfix: `client.force_authenticate(None)` should also clear session info if it exists.
 * Bugfix: Client sending empty string instead of file now clears `FileField`.
 * Bugfix: Empty values on ChoiceFields with `required=False` now consistently return `None`.
+* Bugfix: Clients setting `page=0` now simply returns the default page size, instead of disabling pagination. [*]
+
+---
+
+[*] Note that the change in `page=0` behaviour fixes what is considered to be a bug in how clients can effect the pagination size.  However if you were relying on this behavior you will need to add the following mixin to your list views in order to preserve the existing behavior.
+
+    class DisablePaginationMixin(object):
+        def get_paginate_by(self, queryset=None):
+            if self.request.QUERY_PARAMS['self.paginate_by_param'] == '0':
+                return None
+            return super(DisablePaginationMixin, self).get_paginate_by(queryset)
+
+---
 
 ### 2.3.7
 

@@ -414,11 +414,19 @@ class BaseSerializer(WritableField):
 
         # Set the serializer object if it exists
         obj = get_component(self.parent.object, self.source or field_name) if self.parent.object else None
-        obj = obj.all() if is_simple_callable(getattr(obj, 'all', None)) else obj
+
+        # If we have a model manager or similar object then we need
+        # to iterate through each instance.
+        if (self.many and
+            not hasattr(obj, '__iter__') and
+            is_simple_callable(getattr(obj, 'all', None))):
+            obj = obj.all()
 
         if self.source == '*':
             if value:
-                into.update(value)
+                reverted_data = self.restore_fields(value, {})
+                if not self._errors:
+                    into.update(reverted_data)
         else:
             if value in (None, ''):
                 into[(self.source or field_name)] = None
@@ -613,6 +621,7 @@ class ModelSerializer(Serializer):
         models.TextField: CharField,
         models.CommaSeparatedIntegerField: CharField,
         models.BooleanField: BooleanField,
+        models.NullBooleanField: BooleanField,
         models.FileField: FileField,
         models.ImageField: ImageField,
     }
@@ -706,7 +715,9 @@ class ModelSerializer(Serializer):
             is_m2m = isinstance(relation.field,
                                 models.fields.related.ManyToManyField)
 
-            if is_m2m and not relation.field.rel.through._meta.auto_created:
+            if (is_m2m and
+                hasattr(relation.field.rel, 'through') and
+                not relation.field.rel.through._meta.auto_created):
                 has_through_model = True
 
             if nested:
@@ -874,7 +885,7 @@ class ModelSerializer(Serializer):
 
         # Reverse fk or one-to-one relations
         for (obj, model) in meta.get_all_related_objects_with_model():
-            field_name = obj.field.related_query_name()
+            field_name = obj.get_accessor_name()
             if field_name in attrs:
                 related_data[field_name] = attrs.pop(field_name)
 
@@ -898,7 +909,10 @@ class ModelSerializer(Serializer):
         # Update an existing instance...
         if instance is not None:
             for key, val in attrs.items():
-                setattr(instance, key, val)
+                try:
+                    setattr(instance, key, val)
+                except ValueError:
+                    self._errors[key] = self.error_messages['required']
 
         # ...or create a new instance
         else:
@@ -942,11 +956,16 @@ class ModelSerializer(Serializer):
             del(obj._m2m_data)
 
         if getattr(obj, '_related_data', None):
+            related_fields = dict([
+                (field.get_accessor_name(), field)
+                for field, model
+                in obj._meta.get_all_related_objects_with_model()
+            ])
             for accessor_name, related in obj._related_data.items():
                 if isinstance(related, RelationsList):
                     # Nested reverse fk relationship
                     for related_item in related:
-                        fk_field = obj._meta.get_field_by_name(accessor_name)[0].field.name
+                        fk_field = related_fields[accessor_name].field.name
                         setattr(related_item, fk_field, obj)
                         self.save_object(related_item)
 

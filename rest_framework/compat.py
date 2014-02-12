@@ -7,6 +7,7 @@ versions of django/python, and compatibility wrappers around optional packages.
 from __future__ import unicode_literals
 
 import django
+import inspect
 from django.core.exceptions import ImproperlyConfigured
 from django.conf import settings
 
@@ -69,6 +70,13 @@ try:
 except ImportError:
     import urlparse
 
+# UserDict moves in Python 3
+try:
+    from UserDict import UserDict
+    from UserDict import DictMixin
+except ImportError:
+    from collections import UserDict
+    from collections import MutableMapping as DictMixin
 
 # Try to import PIL in either of the two ways it can end up installed.
 try:
@@ -94,13 +102,6 @@ def get_concrete_model(model_cls):
     except AttributeError:
         # 1.3 does not include concrete model
         return model_cls
-
-
-# Django 1.5 add support for custom auth user model
-if django.VERSION >= (1, 5):
-    AUTH_USER_MODEL = settings.AUTH_USER_MODEL
-else:
-    AUTH_USER_MODEL = 'auth.User'
 
 
 if django.VERSION >= (1, 5):
@@ -529,9 +530,23 @@ except ImportError:
 try:
     import oauth_provider
     from oauth_provider.store import store as oauth_provider_store
+
+    # check_nonce's calling signature in django-oauth-plus changes sometime
+    # between versions 2.0 and 2.2.1
+    def check_nonce(request, oauth_request, oauth_nonce, oauth_timestamp):
+        check_nonce_args = inspect.getargspec(oauth_provider_store.check_nonce).args
+        if 'timestamp' in check_nonce_args:
+            return oauth_provider_store.check_nonce(
+                request, oauth_request, oauth_nonce, oauth_timestamp
+            )
+        return oauth_provider_store.check_nonce(
+            request, oauth_request, oauth_nonce
+        )
+
 except (ImportError, ImproperlyConfigured):
     oauth_provider = None
     oauth_provider_store = None
+    check_nonce = None
 
 # OAuth 2 support is optional
 try:
